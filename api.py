@@ -2,16 +2,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from anime_parsers_ru import KodikParser
-from functools import lru_cache
 import time
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Инициализируем парсер Kodik
 kodik = KodikParser(token=None)
 
-# Настройка постоянной HTTP-сессии
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -19,8 +16,6 @@ session.headers.update({
 })
 
 SHIKI_API = "https://shikimori.one/api"
-
-# Простой in-memory кэш с TTL (временем жизни)
 MEMORY_CACHE = {}
 
 def get_cached(key, ttl=300):
@@ -34,7 +29,6 @@ def get_cached(key, ttl=300):
 def set_cache(key, value, ttl=300):
     MEMORY_CACHE[key] = (value, time.time() + ttl)
 
-# 1. Каталог (кэш на 5 минут)
 @app.route('/api/anime/catalog', methods=['GET'])
 def get_catalog():
     page = request.args.get('page', '1')
@@ -57,9 +51,15 @@ def get_catalog():
         if res.status_code == 200:
             data = res.json()
             for item in data:
+                shiki_id = item.get('id')
                 shiki_img = item.get('image', {}).get('original') or item.get('image', {}).get('preview')
+                
+                # Основной Shikimori
                 item['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
+                # Зеркало Shikimori
                 item['backup_poster'] = f"https://desu.shikimori.one{shiki_img}" if shiki_img else ""
+                # Резерв с MyAnimeList / Jikan CDN по ID
+                item['mal_poster'] = f"https://api.jikan.moe/v4/anime/{shiki_id}/pictures" if shiki_id else ""
             
             result = {'status': 'ok', 'data': data}
             set_cache(cache_key, result, ttl=300)
@@ -68,7 +68,6 @@ def get_catalog():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# 2. Детальная инфа (кэш на 1 час)
 @app.route('/api/anime/details', methods=['GET'])
 def get_details():
     shiki_id = request.args.get('shiki_id')
@@ -86,6 +85,7 @@ def get_details():
             data = res.json()
             shiki_img = data.get('image', {}).get('original')
             data['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
+            data['backup_poster'] = f"https://desu.shikimori.one{shiki_img}" if shiki_img else ""
             result = {'status': 'ok', 'data': data}
             set_cache(cache_key, result, ttl=3600)
             return jsonify(result)
@@ -93,7 +93,6 @@ def get_details():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# 3. Быстрая отдача стрима (кэш на 10 минут)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
     shiki_id = request.args.get('shiki_id')
