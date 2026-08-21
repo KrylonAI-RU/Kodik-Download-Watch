@@ -47,19 +47,17 @@ def get_catalog():
     if search: url += f"&search={search}"
 
     try:
-        res = session.get(url, timeout=4)
+        res = session.get(url, timeout=5)
         if res.status_code == 200:
             data = res.json()
             for item in data:
                 shiki_id = item.get('id')
                 shiki_img = item.get('image', {}).get('original') or item.get('image', {}).get('preview')
-                
-                # Основной Shikimori
                 item['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
-                # Зеркало Shikimori
                 item['backup_poster'] = f"https://desu.shikimori.one{shiki_img}" if shiki_img else ""
-                # Резерв с MyAnimeList / Jikan CDN по ID
-                item['mal_poster'] = f"https://api.jikan.moe/v4/anime/{shiki_id}/pictures" if shiki_id else ""
+                
+                # Качественный горизонтальный фон из скриншотов
+                item['backdrop_url'] = f"https://shikimori.one/system/animes/original/{shiki_id}.jpg"
             
             result = {'status': 'ok', 'data': data}
             set_cache(cache_key, result, ttl=300)
@@ -80,12 +78,21 @@ def get_details():
         return jsonify(cached_data)
 
     try:
-        res = session.get(f"{SHIKI_API}/animes/{shiki_id}", timeout=4)
+        res = session.get(f"{SHIKI_API}/animes/{shiki_id}", timeout=5)
         if res.status_code == 200:
             data = res.json()
             shiki_img = data.get('image', {}).get('original')
             data['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
-            data['backup_poster'] = f"https://desu.shikimori.one{shiki_img}" if shiki_img else ""
+            
+            # Достаем кадры/скриншоты в высоком разрешении
+            screens_res = session.get(f"{SHIKI_API}/animes/{shiki_id}/screenshots", timeout=4)
+            data['screenshots'] = []
+            if screens_res.status_code == 200:
+                screens_data = screens_res.json()
+                data['screenshots'] = [f"https://shikimori.one{s['original']}" for s in screens_data if 'original' in s]
+                
+            data['backdrop_url'] = data['screenshots'][0] if data['screenshots'] else (f"https://shikimori.one{shiki_img}" if shiki_img else "")
+            
             result = {'status': 'ok', 'data': data}
             set_cache(cache_key, result, ttl=3600)
             return jsonify(result)
