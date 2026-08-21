@@ -29,6 +29,13 @@ def get_cached(key, ttl=300):
 def set_cache(key, value, ttl=300):
     MEMORY_CACHE[key] = (value, time.time() + ttl)
 
+@app.after_request
+def add_cache_headers(response):
+    if response.status_code == 200:
+        response.headers['Cache-Control'] = 'public, max-age=3600, s-maxage=3600'
+        response.headers['CDN-Cache-Control'] = 'max-age=3600'
+    return response
+
 @app.route('/api/anime/catalog', methods=['GET'])
 def get_catalog():
     page = request.args.get('page', '1')
@@ -55,8 +62,6 @@ def get_catalog():
                 shiki_img = item.get('image', {}).get('original') or item.get('image', {}).get('preview')
                 item['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
                 item['backup_poster'] = f"https://desu.shikimori.one{shiki_img}" if shiki_img else ""
-                
-                # Качественный горизонтальный фон из скриншотов
                 item['backdrop_url'] = f"https://shikimori.one/system/animes/original/{shiki_id}.jpg"
             
             result = {'status': 'ok', 'data': data}
@@ -84,7 +89,6 @@ def get_details():
             shiki_img = data.get('image', {}).get('original')
             data['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
             
-            # Достаем кадры/скриншоты в высоком разрешении
             screens_res = session.get(f"{SHIKI_API}/animes/{shiki_id}/screenshots", timeout=4)
             data['screenshots'] = []
             if screens_res.status_code == 200:
@@ -116,8 +120,17 @@ def get_stream():
     try:
         embed_url = kodik.get_embed_link(str(shiki_id), "shikimori")
         if embed_url:
+            if embed_url.startswith('//'):
+                embed_url = 'https:' + embed_url
             separator = "&" if "?" in embed_url else "?"
             embed_url = f"{embed_url}{separator}episode={episode}&only_episode=true"
+
+        # Пул зеркал для обхода блокировок
+        mirrors = [embed_url] if embed_url else []
+        if embed_url:
+            for d in ['kodik.cc', 'aniqit.com', 'anivod.com', 'kodik.biz']:
+                if d not in embed_url:
+                    mirrors.append(embed_url.replace(embed_url.split('/')[2], d))
 
         try:
             info = kodik.get_info(str(shiki_id), "shikimori")
@@ -134,6 +147,7 @@ def get_stream():
                 'status': 'ok',
                 'stream_url': m3u8_url,
                 'embed_url': embed_url,
+                'mirrors': mirrors,
                 'type': 'hls',
                 'episode': episode
             }
@@ -142,6 +156,7 @@ def get_stream():
                 'status': 'ok',
                 'stream_url': embed_url,
                 'embed_url': embed_url,
+                'mirrors': mirrors,
                 'type': 'iframe',
                 'episode': episode
             }
