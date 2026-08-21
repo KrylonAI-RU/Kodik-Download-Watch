@@ -10,24 +10,32 @@ kodik = KodikParser(token=None)
 animego = AnimegoParser()
 
 SHIKI_API = "https://shikimori.one/api"
-HEADERS = {'User-Agent': 'AnimeStreamApp/1.0'}
+HEADERS = {'User-Agent': 'AnimeStreamPortal/2.0'}
 
-# 1. Поиск и списки аниме с Шикимори
+# 1. Расширенный каталог с пагинацией (до 50 тайтлов)
 @app.route('/api/anime/catalog', methods=['GET'])
 def get_catalog():
     page = request.args.get('page', 1)
-    limit = request.args.get('limit', 24)
-    order = request.args.get('order', 'popularity') # popularity, ranked, aired_on
-    kind = request.args.get('kind', 'tv') # tv, movie, ova
+    limit = request.args.get('limit', 40)
+    order = request.args.get('order', 'popularity')
+    kind = request.args.get('kind', '')
     search = request.args.get('search', '')
+    genre = request.args.get('genre', '')
 
-    url = f"{SHIKI_API}/animes?page={page}&limit={limit}&order={order}&kind={kind}&search={search}"
+    url = f"{SHIKI_API}/animes?page={page}&limit={limit}&order={order}"
+    if kind:
+        url += f"&kind={kind}"
+    if search:
+        url += f"&search={search}"
+    if genre:
+        url += f"&genre={genre}"
+
     res = requests.get(url, headers=HEADERS)
     if res.status_code == 200:
         return jsonify({'status': 'ok', 'data': res.json()})
-    return jsonify({'status': 'error', 'message': 'Ошибка Shikimori API'}), res.status_code
+    return jsonify({'status': 'error', 'message': 'Ошибка получения данных'}), res.status_code
 
-# 2. Детальная информация об аниме
+# 2. Детальная информация
 @app.route('/api/anime/details', methods=['GET'])
 def get_details():
     shiki_id = request.args.get('shiki_id')
@@ -39,7 +47,7 @@ def get_details():
         return jsonify({'status': 'ok', 'data': res.json()})
     return jsonify({'status': 'error', 'message': 'Тайтл не найден'}), res.status_code
 
-# 3. Получение видеопотока / плеера
+# 3. Видеопоток с точной серией
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
     shiki_id = request.args.get('shiki_id')
@@ -49,14 +57,30 @@ def get_stream():
         return jsonify({'status': 'error', 'message': 'shiki_id обязателен'}), 400
 
     try:
-        # Пробуем m3u8 поток из Kodik по ID шикимори
+        embed_url = kodik.get_embed_link(str(shiki_id), "shikimori")
+        # Добавляем параметр точной серии в embed URL
+        if embed_url and '?' in embed_url:
+            embed_url += f"&episode={episode}"
+        elif embed_url:
+            embed_url += f"?episode={episode}"
+
         try:
             m3u8_url = kodik.get_m3u8_playlist_link(str(shiki_id), "shikimori", episode, "0", 720)
-            embed_url = kodik.get_embed_link(str(shiki_id), "shikimori")
-            return jsonify({'status': 'ok', 'stream_url': m3u8_url, 'embed_url': embed_url, 'type': 'hls'})
+            return jsonify({
+                'status': 'ok', 
+                'stream_url': m3u8_url, 
+                'embed_url': embed_url,
+                'type': 'hls',
+                'episode': episode
+            })
         except Exception:
-            embed_url = kodik.get_embed_link(str(shiki_id), "shikimori")
-            return jsonify({'status': 'ok', 'stream_url': embed_url, 'type': 'iframe'})
+            return jsonify({
+                'status': 'ok', 
+                'stream_url': embed_url, 
+                'embed_url': embed_url,
+                'type': 'iframe',
+                'episode': episode
+            })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
