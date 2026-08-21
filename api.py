@@ -22,28 +22,32 @@ def get_stream():
     try:
         if source == 'kodik':
             try:
-                # 1. Пробуем достать прямую m3u8 ссылку с translation_id
+                # Передаем строго по позициям: id, id_type, seria_num, translation_id, quality
                 m3u8_url = kodik.get_m3u8_playlist_link(
-                    id=kp_id, 
-                    id_type='kinopoisk', 
-                    seria_num=episode, 
-                    translation_id=str(translation_id)
+                    str(kp_id), 
+                    "kinopoisk", 
+                    int(episode), 
+                    str(translation_id), 
+                    720
                 )
                 return jsonify({'status': 'ok', 'stream_url': m3u8_url, 'type': 'hls'})
             except Exception:
-                # 2. Если парсинг m3u8 заблокирован IP-фильтром Kodik, отдаем чистый прямой embed URL
-                embed_url = kodik.get_embed_link(id=kp_id, id_type='kinopoisk')
+                # Если парсинг m3u8 сбрасывается или блокируется IP-фильтром Kodik
+                embed_url = kodik.get_embed_link(str(kp_id), "kinopoisk")
                 return jsonify({'status': 'ok', 'stream_url': embed_url, 'type': 'iframe'})
             
         elif source == 'animego':
-            voices = animego.get_voices(anime_id=kp_id, episode=episode)
-            first_voice = voices['voices'][0]
-            stream = animego.aniboom_get_stream_for_voice(
-                translation_id=first_voice['translation_id'], 
-                episode=episode, 
-                anime_id=kp_id
-            )
-            return jsonify({'status': 'ok', 'stream_url': stream['url'], 'type': stream.get('kind', 'HLS')})
+            voices = animego.get_voices(str(kp_id), episode)
+            if voices and 'voices' in voices and len(voices['voices']) > 0:
+                first_voice = voices['voices'][0]
+                stream = animego.aniboom_get_stream_for_voice(
+                    str(first_voice['translation_id']), 
+                    episode, 
+                    str(kp_id)
+                )
+                return jsonify({'status': 'ok', 'stream_url': stream['url'], 'type': stream.get('kind', 'HLS')})
+            else:
+                return jsonify({'status': 'error', 'message': 'Озвучки не найдены'}), 404
             
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
