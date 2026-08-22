@@ -30,15 +30,9 @@ def set_cache(key, value, ttl=300):
     MEMORY_CACHE[key] = (value, time.time() + ttl)
 
 def format_image_urls(raw_path):
-    """Формирует отказоустойчивые ссылки на картинки без блокировок хотлинкинга"""
     if not raw_path:
         return "", ""
-    if raw_path.startswith('http'):
-        img_url = raw_path
-    else:
-        img_url = f"https://shikimori.one{raw_path}"
-    
-    # Резервный CDN через weserv (обходит любые 403 Forbidden блокировки картинок)
+    img_url = raw_path if raw_path.startswith('http') else f"https://shikimori.one{raw_path}"
     proxy_url = f"https://images.weserv.nl/?url={img_url.replace('https://', '')}&w=500&output=webp"
     return proxy_url, f"https://desu.shikimori.one{raw_path}"
 
@@ -153,58 +147,34 @@ def get_stream():
 
         raw_embed = kodik.get_embed_link(str(shiki_id), "shikimori")
         embed_url = ""
-        mirrors = []
-
         if raw_embed:
             if raw_embed.startswith('//'):
                 raw_embed = 'https:' + raw_embed
-            
             separator = "&" if "?" in raw_embed else "?"
             base_query = f"{separator}episode={episode}&only_episode=true"
             if target_trans_id:
                 base_query += f"&translation_id={target_trans_id}"
+            embed_url = raw_embed + base_query
+            # Принудительно заменяем домены на kodik.info
+            for blocked in ['aniqit.com', 'kodik.cc', 'anivod.com']:
+                embed_url = embed_url.replace(blocked, 'kodik.info')
 
-            # Заменяем заблокированные домены на актуальные рабочие
-            clean_embed = raw_embed + base_query
-            for bad_host in ['aniqit.com', 'kodik.cc']:
-                if bad_host in clean_embed:
-                    clean_embed = clean_embed.replace(bad_host, 'kodik.info')
-            
-            embed_url = clean_embed
-            
-            # Пул только рабочих зеркал
-            host = embed_url.split('/')[2]
-            mirrors = [
-                embed_url,
-                embed_url.replace(host, 'kodik.info'),
-                embed_url.replace(host, 'kodik.biz'),
-                embed_url.replace(host, 'anivod.com')
-            ]
-            mirrors = list(dict.fromkeys(mirrors))
-
+        # Пробуем достать прямой HLS поток
+        m3u8_url = None
         try:
             m3u8_url = kodik.get_m3u8_playlist_link(str(shiki_id), "shikimori", episode, str(target_trans_id or 0), 720)
-            result = {
-                'status': 'ok',
-                'stream_url': m3u8_url,
-                'embed_url': embed_url,
-                'mirrors': mirrors,
-                'translations': translations,
-                'active_translation_id': target_trans_id,
-                'type': 'hls',
-                'episode': episode
-            }
         except Exception:
-            result = {
-                'status': 'ok',
-                'stream_url': embed_url,
-                'embed_url': embed_url,
-                'mirrors': mirrors,
-                'translations': translations,
-                'active_translation_id': target_trans_id,
-                'type': 'iframe',
-                'episode': episode
-            }
+            m3u8_url = None
+
+        result = {
+            'status': 'ok',
+            'stream_url': m3u8_url if m3u8_url else "",
+            'embed_url': embed_url,
+            'translations': translations,
+            'active_translation_id': target_trans_id,
+            'type': 'hls' if m3u8_url else 'iframe',
+            'episode': episode
+        }
 
         set_cache(cache_key, result, ttl=600)
         return jsonify(result)
