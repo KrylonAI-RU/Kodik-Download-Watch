@@ -108,24 +108,39 @@ def get_details():
 def get_stream():
     shiki_id = request.args.get('shiki_id')
     episode = int(request.args.get('episode', 1))
+    translation_id = request.args.get('translation_id', '')
     
     if not shiki_id:
         return jsonify({'status': 'error', 'message': 'shiki_id обязателен'}), 400
 
-    cache_key = f"stream_{shiki_id}_{episode}"
+    cache_key = f"stream_{shiki_id}_{episode}_{translation_id}"
     cached_stream = get_cached(cache_key, ttl=600)
     if cached_stream:
         return jsonify(cached_stream)
 
     try:
+        info = kodik.get_info(str(shiki_id), "shikimori")
+        translations = []
+        target_trans_id = translation_id
+
+        if info and 'translations' in info:
+            for tr in info['translations']:
+                t_id = str(tr.get('id', ''))
+                t_title = tr.get('title') or tr.get('name') or 'Озвучка'
+                translations.append({'id': t_id, 'title': t_title})
+            
+            if not target_trans_id and translations:
+                target_trans_id = translations[0]['id']
+
         embed_url = kodik.get_embed_link(str(shiki_id), "shikimori")
         if embed_url:
             if embed_url.startswith('//'):
                 embed_url = 'https:' + embed_url
             separator = "&" if "?" in embed_url else "?"
             embed_url = f"{embed_url}{separator}episode={episode}&only_episode=true"
+            if target_trans_id:
+                embed_url += f"&translation_id={target_trans_id}"
 
-        # Пул зеркал для обхода блокировок
         mirrors = [embed_url] if embed_url else []
         if embed_url:
             for d in ['kodik.cc', 'aniqit.com', 'anivod.com', 'kodik.biz']:
@@ -133,21 +148,14 @@ def get_stream():
                     mirrors.append(embed_url.replace(embed_url.split('/')[2], d))
 
         try:
-            info = kodik.get_info(str(shiki_id), "shikimori")
-            trans_id = "0"
-            if info and 'translations' in info:
-                for tr in info['translations']:
-                    r = tr.get('series_range', [1, 9999])
-                    if r[0] <= episode <= r[1]:
-                        trans_id = str(tr['id'])
-                        break
-
-            m3u8_url = kodik.get_m3u8_playlist_link(str(shiki_id), "shikimori", episode, trans_id, 720)
+            m3u8_url = kodik.get_m3u8_playlist_link(str(shiki_id), "shikimori", episode, str(target_trans_id or 0), 720)
             result = {
                 'status': 'ok',
                 'stream_url': m3u8_url,
                 'embed_url': embed_url,
                 'mirrors': mirrors,
+                'translations': translations,
+                'active_translation_id': target_trans_id,
                 'type': 'hls',
                 'episode': episode
             }
@@ -157,6 +165,8 @@ def get_stream():
                 'stream_url': embed_url,
                 'embed_url': embed_url,
                 'mirrors': mirrors,
+                'translations': translations,
+                'active_translation_id': target_trans_id,
                 'type': 'iframe',
                 'episode': episode
             }
