@@ -24,3 +24,4 @@ soupsieve==2.4
 urllib3==1.26.15
 Werkzeug==3.1.5
 wsproto==1.2.0
+gevent
