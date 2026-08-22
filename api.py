@@ -29,6 +29,19 @@ def get_cached(key, ttl=300):
 def set_cache(key, value, ttl=300):
     MEMORY_CACHE[key] = (value, time.time() + ttl)
 
+def format_image_urls(raw_path):
+    """Формирует отказоустойчивые ссылки на картинки без блокировок хотлинкинга"""
+    if not raw_path:
+        return "", ""
+    if raw_path.startswith('http'):
+        img_url = raw_path
+    else:
+        img_url = f"https://shikimori.one{raw_path}"
+    
+    # Резервный CDN через weserv (обходит любые 403 Forbidden блокировки картинок)
+    proxy_url = f"https://images.weserv.nl/?url={img_url.replace('https://', '')}&w=500&output=webp"
+    return proxy_url, f"https://desu.shikimori.one{raw_path}"
+
 @app.after_request
 def add_cache_headers(response):
     if response.status_code == 200:
@@ -60,9 +73,10 @@ def get_catalog():
             for item in data:
                 shiki_id = item.get('id')
                 shiki_img = item.get('image', {}).get('original') or item.get('image', {}).get('preview')
-                item['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
-                item['backup_poster'] = f"https://desu.shikimori.one{shiki_img}" if shiki_img else ""
-                item['backdrop_url'] = f"https://shikimori.one/system/animes/original/{shiki_id}.jpg"
+                poster, backup = format_image_urls(shiki_img)
+                item['poster_url'] = poster
+                item['backup_poster'] = backup
+                item['backdrop_url'] = f"https://images.weserv.nl/?url=shikimori.one/system/animes/original/{shiki_id}.jpg&w=1280&output=webp"
             
             result = {'status': 'ok', 'data': data}
             set_cache(cache_key, result, ttl=300)
@@ -87,15 +101,20 @@ def get_details():
         if res.status_code == 200:
             data = res.json()
             shiki_img = data.get('image', {}).get('original')
-            data['poster_url'] = f"https://shikimori.one{shiki_img}" if shiki_img else ""
+            poster, backup = format_image_urls(shiki_img)
+            data['poster_url'] = poster
+            data['backup_poster'] = backup
             
             screens_res = session.get(f"{SHIKI_API}/animes/{shiki_id}/screenshots", timeout=4)
             data['screenshots'] = []
             if screens_res.status_code == 200:
                 screens_data = screens_res.json()
-                data['screenshots'] = [f"https://shikimori.one{s['original']}" for s in screens_data if 'original' in s]
+                data['screenshots'] = [
+                    f"https://images.weserv.nl/?url=shikimori.one{s['original']}&w=1280&output=webp"
+                    for s in screens_data if 'original' in s
+                ]
                 
-            data['backdrop_url'] = data['screenshots'][0] if data['screenshots'] else (f"https://shikimori.one{shiki_img}" if shiki_img else "")
+            data['backdrop_url'] = data['screenshots'][0] if data['screenshots'] else poster
             
             result = {'status': 'ok', 'data': data}
             set_cache(cache_key, result, ttl=3600)
@@ -132,20 +151,36 @@ def get_stream():
             if not target_trans_id and translations:
                 target_trans_id = translations[0]['id']
 
-        embed_url = kodik.get_embed_link(str(shiki_id), "shikimori")
-        if embed_url:
-            if embed_url.startswith('//'):
-                embed_url = 'https:' + embed_url
-            separator = "&" if "?" in embed_url else "?"
-            embed_url = f"{embed_url}{separator}episode={episode}&only_episode=true"
-            if target_trans_id:
-                embed_url += f"&translation_id={target_trans_id}"
+        raw_embed = kodik.get_embed_link(str(shiki_id), "shikimori")
+        embed_url = ""
+        mirrors = []
 
-        mirrors = [embed_url] if embed_url else []
-        if embed_url:
-            for d in ['kodik.cc', 'aniqit.com', 'anivod.com', 'kodik.biz']:
-                if d not in embed_url:
-                    mirrors.append(embed_url.replace(embed_url.split('/')[2], d))
+        if raw_embed:
+            if raw_embed.startswith('//'):
+                raw_embed = 'https:' + raw_embed
+            
+            separator = "&" if "?" in raw_embed else "?"
+            base_query = f"{separator}episode={episode}&only_episode=true"
+            if target_trans_id:
+                base_query += f"&translation_id={target_trans_id}"
+
+            # Заменяем заблокированные домены на актуальные рабочие
+            clean_embed = raw_embed + base_query
+            for bad_host in ['aniqit.com', 'kodik.cc']:
+                if bad_host in clean_embed:
+                    clean_embed = clean_embed.replace(bad_host, 'kodik.info')
+            
+            embed_url = clean_embed
+            
+            # Пул только рабочих зеркал
+            host = embed_url.split('/')[2]
+            mirrors = [
+                embed_url,
+                embed_url.replace(host, 'kodik.info'),
+                embed_url.replace(host, 'kodik.biz'),
+                embed_url.replace(host, 'anivod.com')
+            ]
+            mirrors = list(dict.fromkeys(mirrors))
 
         try:
             m3u8_url = kodik.get_m3u8_playlist_link(str(shiki_id), "shikimori", episode, str(target_trans_id or 0), 720)
